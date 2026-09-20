@@ -854,6 +854,25 @@
     word-break: break-all;
   }
 
+  .loader {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    font-size: 16px;
+    color: var(--text-dim);
+    gap: 12px;
+  }
+  .loader::before {
+    content: '';
+    width: 24px; height: 24px;
+    border: 3px solid rgba(124, 92, 255, 0.3);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   @media (min-width: 1600px) {
     .main { padding: 40px 60px; }
     .hero h1 { font-size: 56px; }
@@ -953,42 +972,41 @@
 
 <div id="toast-container"></div>
 
-<script>
+<script type="module">
 /* ============================================================
-   7ISLANDS v4 — финальная версия
-   - Один игрок = одна страна
-   - Один мэр = один город
-   - Админ-аккаунт: Administrator / admin@7islands.com / 1234567890ant
+   7ISLANDS v5 — Firebase Firestore
+   Все данные хранятся в облаке, видны всем игрокам.
    ============================================================ */
 
-const DB = {
-  get(key, def) { try { const v = localStorage.getItem('mw_' + key); return v ? JSON.parse(v) : def; } catch { return def; } },
-  set(key, val) { localStorage.setItem('mw_' + key, JSON.stringify(val)); },
-  remove(key) { localStorage.removeItem('mw_' + key); }
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import {
+  getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, query, where
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBMOqD1AGsfnUtFsWWPyAitt0WCMWQUKuo",
+  authDomain: "islands-bfaf1.firebaseapp.com",
+  projectId: "islands-bfaf1",
+  storageBucket: "islands-bfaf1.firebasestorage.app",
+  messagingSenderId: "220163104348",
+  appId: "1:220163104348:web:ebb408576dd9e6fbd55099",
+  measurementId: "G-XWE5V7HCTE"
 };
 
-function initDB() {
-  if (!DB.get('users')) DB.set('users', []);
-  if (!DB.get('countries')) DB.set('countries', []);
-  if (!DB.get('cities')) DB.set('cities', []);
-  if (!DB.get('requests')) DB.set('requests', []);
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
-  // Создаём админ-аккаунт, если его ещё нет
-  const users = DB.get('users', []);
-  if (!users.some(u => u.nickname === 'Administrator')) {
-    users.push({
-      id: 'admin_' + uid(),
-      nickname: 'Administrator',
-      email: 'admin@7islands.com',
-      password: '1234567890ant',
-      avatar: null,
-      isModerator: true,
-      createdAt: Date.now()
-    });
-    DB.set('users', users);
-  }
-}
+// ===== Кэш данных (загружается из Firestore) =====
+const CACHE = {
+  users: [],
+  countries: [],
+  cities: [],
+  requests: []
+};
 
+let currentUser = null;
+
+// ===== Утилиты =====
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 function escapeHtml(s) {
   if (s == null) return '';
@@ -1013,7 +1031,6 @@ function avatarSmallHtml(user, size = 36) {
   return `<div class="table-avatar" style="width:${size}px;height:${size}px;background:linear-gradient(135deg, ${color}, ${color}aa);">${escapeHtml(letter)}</div>`;
 }
 function miniAvatarHtml(user, userId) {
-  const size = 36;
   if (user.avatar) {
     return `<div class="mini-avatar" onclick="event.stopPropagation(); openUserProfile('${userId}')" title="${escapeHtml(user.nickname)}"><img src="${user.avatar}" alt=""></div>`;
   }
@@ -1049,13 +1066,60 @@ document.getElementById('modal-overlay').addEventListener('click', e => {
   if (e.target.id === 'modal-overlay') closeModal();
 });
 
-// ===== АВТОРИЗАЦИЯ =====
-let currentUser = DB.get('currentUser', null);
-// Восстановление режима модератора
-if (currentUser && (currentUser.isModerator || DB.get('moderatorMode', false))) {
-  currentUser.isModerator = true;
+// ===== Загрузка данных из Firestore =====
+async function loadAllData() {
+  const [usersSnap, countriesSnap, citiesSnap, requestsSnap] = await Promise.all([
+    getDocs(collection(db, 'users')),
+    getDocs(collection(db, 'countries')),
+    getDocs(collection(db, 'cities')),
+    getDocs(collection(db, 'requests'))
+  ]);
+  CACHE.users = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  CACHE.countries = countriesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  CACHE.cities = citiesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  CACHE.requests = requestsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
+// ===== Сохранение сущностей в Firestore =====
+async function saveUser(user) {
+  const { id, ...data } = user;
+  await setDoc(doc(db, 'users', id), data);
+}
+async function saveCountry(country) {
+  const { id, ...data } = country;
+  await setDoc(doc(db, 'countries', id), data);
+}
+async function saveCity(city) {
+  const { id, ...data } = city;
+  await setDoc(doc(db, 'cities', id), data);
+}
+async function saveRequest(request) {
+  const { id, ...data } = request;
+  await setDoc(doc(db, 'requests', id), data);
+}
+async function deleteUserDoc(id) { await deleteDoc(doc(db, 'users', id)); }
+async function deleteCountryDoc(id) { await deleteDoc(doc(db, 'countries', id)); }
+async function deleteCityDoc(id) { await deleteDoc(doc(db, 'cities', id)); }
+async function deleteRequestDoc(id) { await deleteDoc(doc(db, 'requests', id)); }
+
+// ===== Инициализация админа =====
+async function ensureAdmin() {
+  const snap = await getDocs(query(collection(db, 'users'), where('nickname', '==', 'Administrator')));
+  if (snap.empty) {
+    const admin = {
+      id: 'admin_' + uid(),
+      nickname: 'Administrator',
+      email: 'admin@7islands.com',
+      password: '1234567890ant',
+      avatar: null,
+      isModerator: true,
+      createdAt: Date.now()
+    };
+    await saveUser(admin);
+  }
+}
+
+// ===== Авторизация =====
 function isValidEmail(email) {
   return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email);
 }
@@ -1109,7 +1173,7 @@ document.getElementById('reg-nick').addEventListener('input', e => {
   preview.textContent = v ? v.charAt(0).toUpperCase() : '?';
 });
 
-document.getElementById('register-form').addEventListener('submit', e => {
+document.getElementById('register-form').addEventListener('submit', async e => {
   e.preventDefault();
   clearAllErr();
   const nick = document.getElementById('reg-nick').value.trim();
@@ -1121,7 +1185,6 @@ document.getElementById('register-form').addEventListener('submit', e => {
   let ok = true;
   if (nick.length < 3) { showErr('err-reg-nick', 'Минимум 3 символа'); ok = false; }
   if (!/^[a-zA-Zа-яА-Я0-9_]+$/.test(nick)) { showErr('err-reg-nick', 'Только буквы, цифры и _'); ok = false; }
-  // Никнейм Administrator зарезервирован
   if (nick.toLowerCase() === 'administrator') {
     showErr('err-reg-nick', 'Этот никнейм зарезервирован');
     ok = false;
@@ -1132,11 +1195,10 @@ document.getElementById('register-form').addEventListener('submit', e => {
   if (pass !== pass2) { showErr('err-reg-pass2', 'Пароли не совпадают'); ok = false; }
   if (!ok) return;
 
-  const users = DB.get('users', []);
-  if (users.some(u => u.nickname.toLowerCase() === nick.toLowerCase())) {
+  if (CACHE.users.some(u => u.nickname.toLowerCase() === nick.toLowerCase())) {
     showErr('err-reg-nick', 'Никнейм занят'); return;
   }
-  if (users.some(u => u.email === email)) {
+  if (CACHE.users.some(u => u.email === email)) {
     showErr('err-reg-email', 'Email уже зарегистрирован'); return;
   }
 
@@ -1144,15 +1206,15 @@ document.getElementById('register-form').addEventListener('submit', e => {
     id: uid(), nickname: nick, email: email, password: pass,
     avatar: avatar, createdAt: Date.now()
   };
-  users.push(user);
-  DB.set('users', users);
+  await saveUser(user);
+  CACHE.users.push(user);
   currentUser = user;
-  DB.set('currentUser', user);
+  localStorage.setItem('mw_currentUserId', user.id);
   toast('Аккаунт создан! Добро пожаловать, ' + nick, 'success');
   enterApp();
 });
 
-document.getElementById('login-form').addEventListener('submit', e => {
+document.getElementById('login-form').addEventListener('submit', async e => {
   e.preventDefault();
   clearAllErr();
   const nick = document.getElementById('login-nick').value.trim();
@@ -1162,23 +1224,17 @@ document.getElementById('login-form').addEventListener('submit', e => {
   if (!pass) { showErr('err-login-pass', 'Введите пароль'); ok = false; }
   if (!ok) return;
 
-  const users = DB.get('users', []);
-  const user = users.find(u => u.nickname.toLowerCase() === nick.toLowerCase() && u.password === pass);
+  const user = CACHE.users.find(u => u.nickname.toLowerCase() === nick.toLowerCase() && u.password === pass);
   if (!user) { showErr('err-login-pass', 'Неверный никнейм или пароль'); return; }
   currentUser = user;
-  // Если это админ — автоматически активируем режим модератора
-  if (user.isModerator) {
-    DB.set('moderatorMode', true);
-  }
-  DB.set('currentUser', user);
+  localStorage.setItem('mw_currentUserId', user.id);
   toast('С возвращением, ' + user.nickname + '!', 'success');
   enterApp();
 });
 
 function logout() {
   currentUser = null;
-  DB.remove('currentUser');
-  DB.remove('moderatorMode');
+  localStorage.removeItem('mw_currentUserId');
   document.getElementById('app').classList.remove('active');
   document.getElementById('auth-screen').style.display = 'flex';
   document.querySelectorAll('#auth-screen input').forEach(i => i.value = '');
@@ -1205,7 +1261,7 @@ function renderSidebarUser() {
   `;
 }
 
-// ===== ПРАВА =====
+// ===== Права =====
 function isModerator() { return currentUser && currentUser.isModerator; }
 
 function canManageCountry(country) {
@@ -1218,7 +1274,6 @@ function canManageCountry(country) {
   if (!r) return false;
   return r.isLeader || r.level <= 2 || r.canManageRanks;
 }
-
 function canManageCity(country, city) {
   if (!country || !city) return false;
   if (isModerator()) return true;
@@ -1226,7 +1281,6 @@ function canManageCity(country, city) {
   if (currentUser.id === city.mayorId) return true;
   return false;
 }
-
 function canAcceptCountryRequests(country) {
   if (!country) return false;
   if (isModerator()) return true;
@@ -1237,7 +1291,6 @@ function canAcceptCountryRequests(country) {
   if (!r) return false;
   return r.isLeader || r.level <= 2 || r.canAcceptRequests;
 }
-
 function canAcceptCityRequests(country, city) {
   if (!country || !city) return false;
   if (isModerator()) return true;
@@ -1246,20 +1299,18 @@ function canAcceptCityRequests(country, city) {
   return false;
 }
 
-// ===== ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ (модалка) =====
+// ===== Профиль пользователя =====
 function openUserProfile(userId) {
-  const users = DB.get('users', []);
-  const u = users.find(x => x.id === userId);
+  const u = CACHE.users.find(x => x.id === userId);
   if (!u) { toast('Пользователь не найден', 'error'); return; }
 
   const isMe = u.id === currentUser.id;
   const isMod = isModerator();
 
-  const countries = DB.get('countries', []);
-  const userCountry = countries.find(c => c.members.some(m => m.userId === u.id));
+  const userCountry = CACHE.countries.find(c => c.members.some(m => m.userId === u.id));
   const membership = userCountry ? userCountry.members.find(m => m.userId === u.id) : null;
   const userRank = userCountry && membership ? userCountry.ranks.find(r => r.id === membership.rankId) : null;
-  const userCity = membership ? DB.get('cities', []).find(ci => ci.id === membership.cityId) : null;
+  const userCity = membership ? CACHE.cities.find(ci => ci.id === membership.cityId) : null;
 
   let statusHtml = '';
   if (userCountry) {
@@ -1338,8 +1389,7 @@ function openUserProfile(userId) {
 }
 
 function modEditUser(userId) {
-  const users = DB.get('users', []);
-  const u = users.find(x => x.id === userId);
+  const u = CACHE.users.find(x => x.id === userId);
   if (!u) return;
   closeModal();
   setTimeout(() => {
@@ -1391,9 +1441,8 @@ function modEditUser(userId) {
     });
   }, 200);
 }
-function saveModEditUser(userId) {
-  const users = DB.get('users', []);
-  const u = users.find(x => x.id === userId);
+async function saveModEditUser(userId) {
+  const u = CACHE.users.find(x => x.id === userId);
   if (!u) return;
   const nick = document.getElementById('mu-nick').value.trim();
   const email = document.getElementById('mu-email').value.trim().toLowerCase();
@@ -1404,10 +1453,10 @@ function saveModEditUser(userId) {
     showErr('err-mu-nick', 'Этот никнейм зарезервирован'); return;
   }
   if (!isValidEmail(email)) { showErr('err-mu-email', 'Некорректный email'); return; }
-  if (users.some(x => x.id !== u.id && x.nickname.toLowerCase() === nick.toLowerCase())) {
+  if (CACHE.users.some(x => x.id !== u.id && x.nickname.toLowerCase() === nick.toLowerCase())) {
     showErr('err-mu-nick', 'Никнейм занят'); return;
   }
-  if (users.some(x => x.id !== u.id && x.email === email)) {
+  if (CACHE.users.some(x => x.id !== u.id && x.email === email)) {
     showErr('err-mu-email', 'Email уже используется'); return;
   }
   if (pass) {
@@ -1419,36 +1468,42 @@ function saveModEditUser(userId) {
   u.email = email;
   const av = document.getElementById('mu-avatar-preview').dataset.avatar;
   if (av) u.avatar = av;
-  DB.set('users', users);
+  await saveUser(u);
   closeModal();
   toast('Пользователь обновлён', 'success');
 }
-function modDeleteUser(userId) {
-  const users = DB.get('users', []);
-  const u = users.find(x => x.id === userId);
+async function modDeleteUser(userId) {
+  const u = CACHE.users.find(x => x.id === userId);
   if (!u) return;
   if (!confirm(`Удалить пользователя "${u.nickname}"? Все его страны, города и данные будут удалены.`)) return;
-  let usersNew = users.filter(x => x.id !== userId);
-  let countries = DB.get('countries', []);
-  let cities = DB.get('cities', []);
-  let requests = DB.get('requests', []);
-  const myCountryIds = countries.filter(c => c.creatorId === userId).map(c => c.id);
-  countries = countries.filter(c => c.creatorId !== userId);
-  cities = cities.filter(ci => !myCountryIds.includes(ci.countryId));
-  requests = requests.filter(r => !myCountryIds.includes(r.countryId));
-  countries.forEach(c => { c.members = c.members.filter(m => m.userId !== userId); });
-  cities.forEach(ci => { if (ci.mayorId === userId) ci.mayorId = null; });
-  requests = requests.filter(r => r.userId !== userId);
-  DB.set('users', usersNew);
-  DB.set('countries', countries);
-  DB.set('cities', cities);
-  DB.set('requests', requests);
+
+  const myCountryIds = CACHE.countries.filter(c => c.creatorId === userId).map(c => c.id);
+  for (const cid of myCountryIds) {
+    const citiesToDelete = CACHE.cities.filter(ci => ci.countryId === cid);
+    for (const ci of citiesToDelete) await deleteCityDoc(ci.id);
+    const reqsToDelete = CACHE.requests.filter(r => r.countryId === cid);
+    for (const r of reqsToDelete) await deleteRequestDoc(r.id);
+    await deleteCountryDoc(cid);
+  }
+  for (const c of CACHE.countries) {
+    const before = c.members.length;
+    c.members = c.members.filter(m => m.userId !== userId);
+    if (c.members.length !== before) await saveCountry(c);
+  }
+  for (const ci of CACHE.cities) {
+    if (ci.mayorId === userId) { ci.mayorId = null; await saveCity(ci); }
+  }
+  const reqsToDelete = CACHE.requests.filter(r => r.userId === userId);
+  for (const r of reqsToDelete) await deleteRequestDoc(r.id);
+  await deleteUserDoc(userId);
+
+  await loadAllData();
   closeModal();
   toast('Пользователь удалён', 'success');
   navigate(currentPage);
 }
 
-// ===== НАВИГАЦИЯ =====
+// ===== Навигация =====
 let currentPage = 'home';
 let currentCountryId = null;
 let currentCityId = null;
@@ -1481,13 +1536,9 @@ function navigate(page, opts = {}) {
   }
 }
 
-// ===== ГЛАВНАЯ =====
+// ===== Главная =====
 function renderHome() {
-  const countries = DB.get('countries', []);
-  const cities = DB.get('cities', []);
-  const users = DB.get('users', []);
-  const totalMembers = countries.reduce((s, c) => s + (c.members ? c.members.length : 0), 0);
-
+  const totalMembers = CACHE.countries.reduce((s, c) => s + (c.members ? c.members.length : 0), 0);
   document.getElementById('main-content').innerHTML = `
     <div class="hero glass">
       <h1>Добро пожаловать в 7islands</h1>
@@ -1495,9 +1546,9 @@ function renderHome() {
       <button class="btn btn-primary" onclick="navigate('countries')">🌍 Перейти к странам</button>
     </div>
     <div class="stats-grid">
-      <div class="stat-card glass"><div class="num">${users.length}</div><div class="lbl">Игроков</div></div>
-      <div class="stat-card glass"><div class="num">${countries.length}</div><div class="lbl">Стран</div></div>
-      <div class="stat-card glass"><div class="num">${cities.length}</div><div class="lbl">Городов</div></div>
+      <div class="stat-card glass"><div class="num">${CACHE.users.length}</div><div class="lbl">Игроков</div></div>
+      <div class="stat-card glass"><div class="num">${CACHE.countries.length}</div><div class="lbl">Стран</div></div>
+      <div class="stat-card glass"><div class="num">${CACHE.cities.length}</div><div class="lbl">Городов</div></div>
       <div class="stat-card glass"><div class="num">${totalMembers}</div><div class="lbl">Участников</div></div>
     </div>
     <div class="info-card glass">
@@ -1507,13 +1558,11 @@ function renderHome() {
   `;
 }
 
-// ===== СТРАНЫ =====
+// ===== Страны =====
 function renderCountries() {
-  const countries = DB.get('countries', []);
-  // Проверка: есть ли у текущего пользователя уже созданная страна
-  const alreadyHasCountry = !isModerator() && countries.some(c => c.creatorId === currentUser.id);
+  const alreadyHasCountry = !isModerator() && CACHE.countries.some(c => c.creatorId === currentUser.id);
 
-  const list = countries.map(c => {
+  const list = CACHE.countries.map(c => {
     const membersCount = c.members ? c.members.length : 0;
     const userInCountry = c.members && c.members.some(m => m.userId === currentUser.id);
     const userPending = getUserPendingRequest(c.id, null);
@@ -1545,7 +1594,6 @@ function renderCountries() {
     `;
   }).join('');
 
-  // Кнопка создания показывается только если у игрока ещё нет страны и он не модератор
   const createBtn = (!isModerator() && !alreadyHasCountry)
     ? `<button class="btn btn-primary" onclick="openCreateCountryModal()">+ Создать страну</button>`
     : (alreadyHasCountry ? `<span class="badge warning" style="padding:10px 16px;">У вас уже есть страна</span>` : '');
@@ -1572,9 +1620,7 @@ function renderCountries() {
 
 function openCreateCountryModal() {
   if (isModerator()) { toast('Модераторы не могут создавать страны', 'error'); return; }
-  // Проверка: уже есть страна?
-  const countries = DB.get('countries', []);
-  if (countries.some(c => c.creatorId === currentUser.id)) {
+  if (CACHE.countries.some(c => c.creatorId === currentUser.id)) {
     toast('Вы уже создали страну. Одна страна — один игрок.', 'error');
     return;
   }
@@ -1629,10 +1675,9 @@ function openCreateCountryModal() {
   });
 }
 
-function createCountry() {
+async function createCountry() {
   if (isModerator()) { toast('Модераторы не могут создавать страны', 'error'); return; }
-  const countries = DB.get('countries', []);
-  if (countries.some(c => c.creatorId === currentUser.id)) {
+  if (CACHE.countries.some(c => c.creatorId === currentUser.id)) {
     toast('Вы уже создали страну', 'error');
     return;
   }
@@ -1643,7 +1688,7 @@ function createCountry() {
 
   clearErr('err-country-name');
   if (name.length < 2) { showErr('err-country-name', 'Название слишком короткое'); return; }
-  if (countries.some(c => c.name.toLowerCase() === name.toLowerCase())) {
+  if (CACHE.countries.some(c => c.name.toLowerCase() === name.toLowerCase())) {
     showErr('err-country-name', 'Такая страна уже существует'); return;
   }
 
@@ -1662,17 +1707,16 @@ function createCountry() {
     }],
     createdAt: Date.now()
   };
-  countries.push(country);
-  DB.set('countries', countries);
+  await saveCountry(country);
+  CACHE.countries.push(country);
   closeModal();
   toast('Страна "' + name + '" создана!', 'success');
   navigate('country', { countryId: country.id });
 }
 
-function joinCountry(countryId) {
+async function joinCountry(countryId) {
   if (isModerator()) { toast('Модераторы не могут вступать в страны', 'error'); return; }
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c) return;
   if (c.members.some(m => m.userId === currentUser.id)) {
     toast('Вы уже в этой стране', 'info'); return;
@@ -1683,35 +1727,34 @@ function joinCountry(countryId) {
       userId: currentUser.id, rankId: rookieRank.id,
       cityId: null, joinedAt: Date.now()
     });
-    DB.set('countries', countries);
+    await saveCountry(c);
     toast('Вы вступили в страну "' + c.name + '"', 'success');
     navigate('country', { countryId: c.id });
   } else {
-    const requests = DB.get('requests', []);
-    if (requests.some(r => r.countryId === countryId && r.userId === currentUser.id && !r.cityId && r.status === 'pending')) {
+    if (CACHE.requests.some(r => r.countryId === countryId && r.userId === currentUser.id && !r.cityId && r.status === 'pending')) {
       toast('Заявка уже отправлена', 'info'); return;
     }
-    requests.push({
+    const req = {
       id: uid(), countryId: countryId, cityId: null,
       userId: currentUser.id, status: 'pending', createdAt: Date.now()
-    });
-    DB.set('requests', requests);
+    };
+    await saveRequest(req);
+    CACHE.requests.push(req);
     toast('Заявка отправлена на рассмотрение', 'success');
     renderCountries();
   }
 }
 
-// ===== СТРАНА (ДЕТАЛИ) =====
+// ===== Страна (детали) =====
 function renderCountry() {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === currentCountryId);
+  const c = CACHE.countries.find(x => x.id === currentCountryId);
   if (!c) { navigate('countries'); return; }
-  const cities = DB.get('cities', []).filter(ci => ci.countryId === c.id);
+  const cities = CACHE.cities.filter(ci => ci.countryId === c.id);
   const manage = canManageCountry(c);
   const member = c.members.find(m => m.userId === currentUser.id);
   const isCreator = c.creatorId === currentUser.id;
 
-  const requests = DB.get('requests', []).filter(r => r.countryId === c.id && !r.cityId && r.status === 'pending');
+  const requests = CACHE.requests.filter(r => r.countryId === c.id && !r.cityId && r.status === 'pending');
 
   const MAX_MINIS = 12;
   const membersSlice = c.members.slice(0, MAX_MINIS);
@@ -1720,7 +1763,7 @@ function renderCountry() {
     <div class="members-strip">
       <span class="strip-label">Участники (${c.members.length}):</span>
       ${membersSlice.map(m => {
-        const u = DB.get('users', []).find(x => x.id === m.userId);
+        const u = CACHE.users.find(x => x.id === m.userId);
         return u ? miniAvatarHtml(u, u.id) : '';
       }).join('')}
       ${moreCount > 0 ? `<div class="strip-more">+${moreCount}</div>` : ''}
@@ -1728,7 +1771,7 @@ function renderCountry() {
   `;
 
   const membersHtml = c.members.map(m => {
-    const u = DB.get('users', []).find(x => x.id === m.userId);
+    const u = CACHE.users.find(x => x.id === m.userId);
     if (!u) return '';
     const rank = c.ranks.find(r => r.id === m.rankId);
     const city = cities.find(ci => ci.id === m.cityId);
@@ -1764,7 +1807,7 @@ function renderCountry() {
   }).join('');
 
   const citiesHtml = cities.map(ci => {
-    const mayor = ci.mayorId ? DB.get('users', []).find(u => u.id === ci.mayorId) : null;
+    const mayor = ci.mayorId ? CACHE.users.find(u => u.id === ci.mayorId) : null;
     const membersCount = c.members.filter(m => m.cityId === ci.id).length;
     const cityActions = [];
     if (manage) {
@@ -1799,7 +1842,7 @@ function renderCountry() {
   }).join('');
 
   const requestsHtml = requests.length ? requests.map(r => {
-    const u = DB.get('users', []).find(x => x.id === r.userId);
+    const u = CACHE.users.find(x => x.id === r.userId);
     if (!u) return '';
     const canAcc = canAcceptCountryRequests(c);
     return `
@@ -1902,9 +1945,8 @@ function switchCountryTab(el, id) {
 }
 
 function openModCityListModal(countryId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
-  const cities = DB.get('cities', []).filter(ci => ci.countryId === countryId);
+  const c = CACHE.countries.find(x => x.id === countryId);
+  const cities = CACHE.cities.filter(ci => ci.countryId === countryId);
   if (!c) return;
   const listHtml = cities.length ? cities.map(ci => `
     <div class="list-item" onclick="closeModal(); setTimeout(()=>openEditCityModal('${c.id}', '${ci.id}'), 200);">
@@ -1926,8 +1968,7 @@ function openModCityListModal(countryId) {
 }
 
 function openEditCountryModal(countryId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c || !canManageCountry(c)) return;
   openModal(`
     <div class="modal-header">
@@ -1960,7 +2001,7 @@ function openEditCountryModal(countryId) {
     </div>
     <div class="modal-footer">
       <button class="btn" onclick="closeModal()">Отмена</button>
-      <button class="btn btn-primary" onclick="saveCountry('${c.id}')">Сохранить</button>
+      <button class="btn btn-primary" onclick="saveCountryEdit('${c.id}')">Сохранить</button>
     </div>
   `);
   if (c.avatar) document.getElementById('ec-avatar-preview').dataset.avatar = c.avatar;
@@ -1976,24 +2017,22 @@ function openEditCountryModal(countryId) {
     reader.readAsDataURL(file);
   });
 }
-function saveCountry(id) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === id);
+async function saveCountryEdit(id) {
+  const c = CACHE.countries.find(x => x.id === id);
   if (!c) return;
   c.name = document.getElementById('ec-name').value.trim() || c.name;
   c.description = document.getElementById('ec-desc').value.trim();
   c.autoAccept = document.getElementById('ec-auto').checked;
   const av = document.getElementById('ec-avatar-preview').dataset.avatar;
   if (av) c.avatar = av;
-  DB.set('countries', countries);
+  await saveCountry(c);
   closeModal();
   toast('Изменения сохранены', 'success');
   renderCountry();
 }
 
 function openDeleteCountryConfirm(countryId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c || !canManageCountry(c)) return;
   openModal(`
     <div class="confirm-delete-modal">
@@ -2029,77 +2068,77 @@ function openDeleteCountryConfirm(countryId) {
   });
   setTimeout(() => inp.focus(), 100);
 }
-function confirmDeleteCountry(id) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === id);
+async function confirmDeleteCountry(id) {
+  const c = CACHE.countries.find(x => x.id === id);
   if (!c) return;
   const inp = document.getElementById('delete-confirm-input');
   if (inp.value.trim() !== c.name) {
     showErr('err-delete-confirm', 'Название не совпадает');
     return;
   }
-  DB.set('countries', countries.filter(x => x.id !== id));
-  DB.set('cities', DB.get('cities', []).filter(ci => ci.countryId !== id));
-  DB.set('requests', DB.get('requests', []).filter(r => r.countryId !== id));
+  const citiesToDelete = CACHE.cities.filter(ci => ci.countryId === id);
+  for (const ci of citiesToDelete) await deleteCityDoc(ci.id);
+  const reqsToDelete = CACHE.requests.filter(r => r.countryId === id);
+  for (const r of reqsToDelete) await deleteRequestDoc(r.id);
+  await deleteCountryDoc(id);
+  await loadAllData();
   closeModal();
   toast('Страна удалена', 'success');
   navigate('countries');
 }
 
-function leaveCountry(countryId) {
+async function leaveCountry(countryId) {
   if (isModerator()) return;
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c) return;
   if (c.creatorId === currentUser.id) {
     toast('Создатель не может выйти — сначала удалите страну', 'error');
     return;
   }
   c.members = c.members.filter(m => m.userId !== currentUser.id);
-  DB.set('countries', countries);
-  DB.set('requests', DB.get('requests', []).filter(r => !(r.userId === currentUser.id && r.countryId === countryId)));
+  await saveCountry(c);
+  const reqs = CACHE.requests.filter(r => r.userId === currentUser.id && r.countryId === countryId);
+  for (const r of reqs) await deleteRequestDoc(r.id);
+  await loadAllData();
   toast('Вы вышли из страны', 'success');
   navigate('countries');
 }
 
-function kickMember(countryId, userId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+async function kickMember(countryId, userId) {
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c || !canManageCountry(c)) return;
   if (userId === c.creatorId) { toast('Нельзя исключить создателя', 'error'); return; }
-  const cities = DB.get('cities', []);
-  cities.forEach(ci => { if (ci.mayorId === userId && ci.countryId === countryId) ci.mayorId = null; });
+  const cities = CACHE.cities.filter(ci => ci.countryId === countryId);
+  for (const ci of cities) {
+    if (ci.mayorId === userId) { ci.mayorId = null; await saveCity(ci); }
+  }
   c.members = c.members.filter(m => m.userId !== userId);
-  DB.set('countries', countries);
-  DB.set('cities', cities);
+  await saveCountry(c);
   toast('Участник исключён', 'success');
   renderCountry();
 }
 
-function changeMemberRank(countryId, userId, rankId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+async function changeMemberRank(countryId, userId, rankId) {
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c || !canManageCountry(c)) return;
   const m = c.members.find(x => x.userId === userId);
   if (m) m.rankId = rankId;
-  DB.set('countries', countries);
+  await saveCountry(c);
   toast('Ранг изменён', 'success');
 }
-function changeMemberCity(countryId, userId, cityId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+async function changeMemberCity(countryId, userId, cityId) {
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c || !canManageCountry(c)) return;
   const m = c.members.find(x => x.userId === userId);
   if (m) m.cityId = cityId || null;
-  DB.set('countries', countries);
+  await saveCountry(c);
   toast('Город изменён', 'success');
   renderCountry();
 }
 
-// ===== РЕДАКТОР РАНГОВ =====
+// ===== Редактор рангов =====
 function openRanksEditorModal(countryId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c || !canManageCountry(c)) return;
   renderRanksEditor(c);
 }
@@ -2135,8 +2174,7 @@ function renderRanksEditor(c) {
 }
 
 function openAddRankModal(countryId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c) return;
   const usedLevels = new Set(c.ranks.map(r => r.level));
   let freeLevel = 2;
@@ -2167,9 +2205,8 @@ function openAddRankModal(countryId) {
     </div>
   `);
 }
-function addRank(countryId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+async function addRank(countryId) {
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c) return;
   const name = document.getElementById('rank-name').value.trim();
   const level = parseInt(document.getElementById('rank-level').value);
@@ -2183,13 +2220,12 @@ function addRank(countryId) {
     canManageRanks: false,
     canAcceptRequests: document.getElementById('rank-req').checked
   });
-  DB.set('countries', countries);
+  await saveCountry(c);
   toast('Ранг создан', 'success');
   renderRanksEditor(c);
 }
 function openEditRankModal(countryId, rankId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+  const c = CACHE.countries.find(x => x.id === countryId);
   const r = c.ranks.find(x => x.id === rankId);
   if (!c || !r) return;
   openModal(`
@@ -2213,49 +2249,45 @@ function openEditRankModal(countryId, rankId) {
     </div>
   `);
 }
-function saveRank(countryId, rankId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+async function saveRank(countryId, rankId) {
+  const c = CACHE.countries.find(x => x.id === countryId);
   const r = c.ranks.find(x => x.id === rankId);
   r.name = document.getElementById('er-name').value.trim() || r.name;
   r.canAcceptRequests = document.getElementById('er-req').checked;
   r.canManageCities = document.getElementById('er-cities').checked;
-  DB.set('countries', countries);
+  await saveCountry(c);
   toast('Ранг обновлён', 'success');
   renderRanksEditor(c);
 }
-function deleteRank(countryId, rankId) {
+async function deleteRank(countryId, rankId) {
   if (!confirm('Удалить ранг? Участники получат низший ранг.')) return;
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+  const c = CACHE.countries.find(x => x.id === countryId);
   const rookieRank = c.ranks.slice().sort((a, b) => b.level - a.level)[0];
   c.members.forEach(m => { if (m.rankId === rankId) m.rankId = rookieRank.id; });
   c.ranks = c.ranks.filter(r => r.id !== rankId);
-  DB.set('countries', countries);
+  await saveCountry(c);
   toast('Ранг удалён', 'success');
   renderRanksEditor(c);
 }
 
-// ===== ЗАЯВКИ =====
+// ===== Заявки =====
 function getUserPendingRequest(countryId, cityId) {
-  return DB.get('requests', []).find(r =>
+  return CACHE.requests.find(r =>
     r.countryId === countryId &&
     (cityId ? r.cityId === cityId : !r.cityId) &&
     r.userId === currentUser.id &&
     r.status === 'pending'
   );
 }
-function acceptRequest(reqId) {
-  const requests = DB.get('requests', []);
-  const r = requests.find(x => x.id === reqId);
+async function acceptRequest(reqId) {
+  const r = CACHE.requests.find(x => x.id === reqId);
   if (!r) return;
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === r.countryId);
+  const c = CACHE.countries.find(x => x.id === r.countryId);
   if (!c) return;
 
   let canAcc = false;
   if (r.cityId) {
-    const city = DB.get('cities', []).find(ci => ci.id === r.cityId);
+    const city = CACHE.cities.find(ci => ci.id === r.cityId);
     canAcc = canAcceptCityRequests(c, city);
   } else {
     canAcc = canAcceptCountryRequests(c);
@@ -2268,36 +2300,32 @@ function acceptRequest(reqId) {
       userId: r.userId, rankId: rookieRank.id,
       cityId: r.cityId || null, joinedAt: Date.now()
     });
+    await saveCountry(c);
   }
   r.status = 'accepted';
-  DB.set('countries', countries);
-  DB.set('requests', requests);
+  await saveRequest(r);
   toast('Заявка принята', 'success');
   if (currentPage === 'country') renderCountry();
   else if (currentPage === 'city') renderCity();
 }
-function rejectRequest(reqId) {
-  const requests = DB.get('requests', []);
-  const r = requests.find(x => x.id === reqId);
+async function rejectRequest(reqId) {
+  const r = CACHE.requests.find(x => x.id === reqId);
   if (!r) return;
   r.status = 'rejected';
-  DB.set('requests', requests);
+  await saveRequest(r);
   toast('Заявка отклонена', 'info');
   if (currentPage === 'country') renderCountry();
   else if (currentPage === 'city') renderCity();
 }
 
-// ===== ГОРОДА =====
-// Получаем список кандидатов на мэра (исключая тех, кто уже мэр другого города)
+// ===== Города =====
 function getMayorCandidates(country, excludeCityId = null) {
-  const cities = DB.get('cities', []);
   const candidates = [];
   country.members.forEach(m => {
     if (m.userId === country.creatorId) return;
-    // Исключаем тех, кто уже мэр ДРУГОГО города
-    const isMayorOfOther = cities.some(ci => ci.mayorId === m.userId && ci.id !== excludeCityId);
+    const isMayorOfOther = CACHE.cities.some(ci => ci.mayorId === m.userId && ci.id !== excludeCityId);
     if (isMayorOfOther) return;
-    const u = DB.get('users', []).find(x => x.id === m.userId);
+    const u = CACHE.users.find(x => x.id === m.userId);
     if (u) candidates.push(u);
   });
   return candidates;
@@ -2305,8 +2333,7 @@ function getMayorCandidates(country, excludeCityId = null) {
 
 function openCreateCityModal(countryId) {
   if (isModerator()) { toast('Модераторы не могут создавать города', 'error'); return; }
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c || !canManageCountry(c)) { toast('Нет прав', 'error'); return; }
   openModal(`
     <div class="modal-header">
@@ -2362,9 +2389,8 @@ function openCreateCityModal(countryId) {
     sel.innerHTML += `<option value="${u.id}">${escapeHtml(u.nickname)}</option>`;
   });
 }
-function createCity(countryId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+async function createCity(countryId) {
+  const c = CACHE.countries.find(x => x.id === countryId);
   if (!c || !canManageCountry(c)) { toast('Нет прав', 'error'); return; }
   const name = document.getElementById('city-name').value.trim();
   const desc = document.getElementById('city-desc').value.trim();
@@ -2373,12 +2399,10 @@ function createCity(countryId) {
 
   clearErr('err-city-name');
   if (name.length < 2) { showErr('err-city-name', 'Название слишком короткое'); return; }
-  const cities = DB.get('cities', []);
-  if (cities.some(ci => ci.countryId === countryId && ci.name.toLowerCase() === name.toLowerCase())) {
+  if (CACHE.cities.some(ci => ci.countryId === countryId && ci.name.toLowerCase() === name.toLowerCase())) {
     showErr('err-city-name', 'Такой город уже есть'); return;
   }
-  // Проверка: мэр не должен уже быть мэром другого города
-  if (mayorId && cities.some(ci => ci.mayorId === mayorId)) {
+  if (mayorId && CACHE.cities.some(ci => ci.mayorId === mayorId)) {
     toast('Этот игрок уже является мэром другого города', 'error');
     return;
   }
@@ -2390,15 +2414,15 @@ function createCity(countryId) {
     ],
     createdAt: Date.now()
   };
-  cities.push(city);
-  DB.set('cities', cities);
+  await saveCity(city);
+  CACHE.cities.push(city);
   if (mayorId) {
     const m = c.members.find(x => x.userId === mayorId);
     if (m) {
       m.cityId = city.id;
       const mayorRank = city.ranks.find(r => r.level === 1);
       m.cityRankId = mayorRank.id;
-      DB.set('countries', countries);
+      await saveCountry(c);
     }
   }
   closeModal();
@@ -2407,10 +2431,8 @@ function createCity(countryId) {
 }
 
 function openEditCityModal(countryId, cityId) {
-  const countries = DB.get('countries', []);
-  const cities = DB.get('cities', []);
-  const c = countries.find(x => x.id === countryId);
-  const city = cities.find(ci => ci.id === cityId);
+  const c = CACHE.countries.find(x => x.id === countryId);
+  const city = CACHE.cities.find(ci => ci.id === cityId);
   if (!c || !city || !canManageCity(c, city)) return;
   openModal(`
     <div class="modal-header">
@@ -2442,7 +2464,7 @@ function openEditCityModal(countryId, cityId) {
     </div>
     <div class="modal-footer">
       <button class="btn" onclick="closeModal()">Отмена</button>
-      <button class="btn btn-primary" onclick="saveCity('${countryId}', '${cityId}')">Сохранить</button>
+      <button class="btn btn-primary" onclick="saveCityEdit('${countryId}', '${cityId}')">Сохранить</button>
     </div>
     <div class="page-footer-delete" style="margin-top:20px;">
       <button class="btn-delete-quiet" onclick="openDeleteCityConfirm('${countryId}', '${cityId}')">Удалить город</button>
@@ -2462,17 +2484,14 @@ function openEditCityModal(countryId, cityId) {
   });
   const sel = document.getElementById('eci-mayor');
   sel.value = city.mayorId || '';
-  // Кандидаты на мэра: исключаем тех, кто уже мэр ДРУГОГО города
   const candidates = getMayorCandidates(c, cityId);
   candidates.forEach(u => {
     sel.innerHTML += `<option value="${u.id}">${escapeHtml(u.nickname)}</option>`;
   });
 }
-function saveCity(countryId, cityId) {
-  const countries = DB.get('countries', []);
-  const cities = DB.get('cities', []);
-  const c = countries.find(x => x.id === countryId);
-  const city = cities.find(ci => ci.id === cityId);
+async function saveCityEdit(countryId, cityId) {
+  const c = CACHE.countries.find(x => x.id === countryId);
+  const city = CACHE.cities.find(ci => ci.id === cityId);
   if (!c || !city) return;
   city.name = document.getElementById('eci-name').value.trim() || city.name;
   city.description = document.getElementById('eci-desc').value.trim();
@@ -2480,8 +2499,7 @@ function saveCity(countryId, cityId) {
   const av = document.getElementById('eci-avatar-preview').dataset.avatar;
   if (av) city.avatar = av;
   if (newMayorId !== city.mayorId) {
-    // Проверка: новый мэр не должен быть мэром другого города
-    if (newMayorId && cities.some(ci => ci.mayorId === newMayorId && ci.id !== cityId)) {
+    if (newMayorId && CACHE.cities.some(ci => ci.mayorId === newMayorId && ci.id !== cityId)) {
       toast('Этот игрок уже является мэром другого города', 'error');
       return;
     }
@@ -2499,8 +2517,8 @@ function saveCity(countryId, cityId) {
       }
     }
   }
-  DB.set('countries', countries);
-  DB.set('cities', cities);
+  await saveCity(city);
+  await saveCountry(c);
   closeModal();
   toast('Город обновлён', 'success');
   if (currentPage === 'country') renderCountry();
@@ -2508,10 +2526,8 @@ function saveCity(countryId, cityId) {
 }
 
 function openDeleteCityConfirm(countryId, cityId) {
-  const countries = DB.get('countries', []);
-  const cities = DB.get('cities', []);
-  const c = countries.find(x => x.id === countryId);
-  const city = cities.find(ci => ci.id === cityId);
+  const c = CACHE.countries.find(x => x.id === countryId);
+  const city = CACHE.cities.find(ci => ci.id === cityId);
   if (!c || !city || !canManageCity(c, city)) return;
   openModal(`
     <div class="confirm-delete-modal">
@@ -2544,11 +2560,9 @@ function openDeleteCityConfirm(countryId, cityId) {
   });
   setTimeout(() => inp.focus(), 100);
 }
-function confirmDeleteCity(countryId, cityId) {
-  const countries = DB.get('countries', []);
-  const cities = DB.get('cities', []);
-  const c = countries.find(x => x.id === countryId);
-  const city = cities.find(ci => ci.id === cityId);
+async function confirmDeleteCity(countryId, cityId) {
+  const c = CACHE.countries.find(x => x.id === countryId);
+  const city = CACHE.cities.find(ci => ci.id === cityId);
   if (!c || !city) return;
   const inp = document.getElementById('delete-city-confirm-input');
   if (inp.value.trim() !== city.name) {
@@ -2556,25 +2570,25 @@ function confirmDeleteCity(countryId, cityId) {
     return;
   }
   c.members.forEach(m => { if (m.cityId === cityId) { m.cityId = null; delete m.cityRankId; } });
-  DB.set('countries', countries);
-  DB.set('cities', cities.filter(ci => ci.id !== cityId));
-  DB.set('requests', DB.get('requests', []).filter(r => r.cityId !== cityId));
+  await saveCountry(c);
+  await deleteCityDoc(cityId);
+  const reqs = CACHE.requests.filter(r => r.cityId === cityId);
+  for (const r of reqs) await deleteRequestDoc(r.id);
+  await loadAllData();
   closeModal();
   toast('Город удалён', 'success');
   navigate('country', { countryId });
 }
 
-// ===== ГОРОД (ДЕТАЛИ) =====
+// ===== Город (детали) =====
 function renderCity() {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === currentCountryId);
-  const cities = DB.get('cities', []);
-  const city = cities.find(ci => ci.id === currentCityId);
+  const c = CACHE.countries.find(x => x.id === currentCountryId);
+  const city = CACHE.cities.find(ci => ci.id === currentCityId);
   if (!c || !city) { navigate('countries'); return; }
   const manageCity = canManageCity(c, city);
   const manageCountry = canManageCountry(c);
   const cityMembers = c.members.filter(m => m.cityId === city.id);
-  const requests = DB.get('requests', []).filter(r => r.cityId === city.id && r.status === 'pending');
+  const requests = CACHE.requests.filter(r => r.cityId === city.id && r.status === 'pending');
 
   const MAX_MINIS = 12;
   const membersSlice = cityMembers.slice(0, MAX_MINIS);
@@ -2583,7 +2597,7 @@ function renderCity() {
     <div class="members-strip">
       <span class="strip-label">Жители (${cityMembers.length}):</span>
       ${membersSlice.map(m => {
-        const u = DB.get('users', []).find(x => x.id === m.userId);
+        const u = CACHE.users.find(x => x.id === m.userId);
         return u ? miniAvatarHtml(u, u.id) : '';
       }).join('')}
       ${moreCount > 0 ? `<div class="strip-more">+${moreCount}</div>` : ''}
@@ -2591,7 +2605,7 @@ function renderCity() {
   `;
 
   const membersHtml = cityMembers.map(m => {
-    const u = DB.get('users', []).find(x => x.id === m.userId);
+    const u = CACHE.users.find(x => x.id === m.userId);
     if (!u) return '';
     const countryRank = c.ranks.find(r => r.id === m.rankId);
     const cityRank = city.ranks.find(r => r.id === m.cityRankId) || city.ranks.find(r => r.level === 10);
@@ -2618,7 +2632,7 @@ function renderCity() {
   }).join('');
 
   const requestsHtml = requests.length ? requests.map(r => {
-    const u = DB.get('users', []).find(x => x.id === r.userId);
+    const u = CACHE.users.find(x => x.id === r.userId);
     if (!u) return '';
     const canAcc = canAcceptCityRequests(c, city);
     return `
@@ -2645,7 +2659,7 @@ function renderCity() {
       <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
         <select class="select" id="assign-user" style="max-width:250px;">
           ${noCityMembers.map(m => {
-            const u = DB.get('users', []).find(x => x.id === m.userId);
+            const u = CACHE.users.find(x => x.id === m.userId);
             return u ? `<option value="${u.id}">${escapeHtml(u.nickname)}</option>` : '';
           }).join('')}
         </select>
@@ -2674,7 +2688,7 @@ function renderCity() {
           ${avatarHtml(city, 64)}
           <div style="min-width:0;">
             <h1>${escapeHtml(city.name)}</h1>
-            <p>${escapeHtml(city.description || 'Без описания')} • Мэр: ${city.mayorId ? escapeHtml(DB.get('users', []).find(u => u.id === city.mayorId)?.nickname || '—') : '<span style="color:var(--text-dim);">не назначен</span>'}</p>
+            <p>${escapeHtml(city.description || 'Без описания')} • Мэр: ${city.mayorId ? escapeHtml(CACHE.users.find(u => u.id === city.mayorId)?.nickname || '—') : '<span style="color:var(--text-dim);">не назначен</span>'}</p>
           </div>
         </div>
         ${membersStrip}
@@ -2712,12 +2726,10 @@ function switchCityTab(el, id) {
   });
 }
 
-function leaveCity(countryId, cityId) {
+async function leaveCity(countryId, cityId) {
   if (isModerator()) return;
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
-  const cities = DB.get('cities', []);
-  const city = cities.find(ci => ci.id === cityId);
+  const c = CACHE.countries.find(x => x.id === countryId);
+  const city = CACHE.cities.find(ci => ci.id === cityId);
   if (!c || !city) return;
   const m = c.members.find(x => x.userId === currentUser.id);
   if (!m) return;
@@ -2727,51 +2739,46 @@ function leaveCity(countryId, cityId) {
   }
   m.cityId = null;
   delete m.cityRankId;
-  DB.set('countries', countries);
+  await saveCountry(c);
   toast('Вы вышли из города', 'success');
   renderCity();
 }
-function kickFromCity(countryId, cityId, userId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
-  const cities = DB.get('cities', []);
-  const city = cities.find(ci => ci.id === cityId);
+async function kickFromCity(countryId, cityId, userId) {
+  const c = CACHE.countries.find(x => x.id === countryId);
+  const city = CACHE.cities.find(ci => ci.id === cityId);
   if (!c || !city || !canManageCity(c, city)) return;
   const m = c.members.find(x => x.userId === userId);
   if (m) { m.cityId = null; delete m.cityRankId; }
   if (city.mayorId === userId) city.mayorId = null;
-  DB.set('countries', countries);
-  DB.set('cities', cities);
+  await saveCountry(c);
+  await saveCity(city);
   toast('Игрок выгнан из города', 'success');
   renderCity();
 }
-function assignToCity(countryId, cityId) {
-  const countries = DB.get('countries', []);
-  const c = countries.find(x => x.id === countryId);
+async function assignToCity(countryId, cityId) {
+  const c = CACHE.countries.find(x => x.id === countryId);
   const userId = document.getElementById('assign-user').value;
   const m = c.members.find(x => x.userId === userId);
   if (m) {
     m.cityId = cityId;
-    const cities = DB.get('cities', []);
-    const city = cities.find(ci => ci.id === cityId);
+    const city = CACHE.cities.find(ci => ci.id === cityId);
     const residentRank = city.ranks.find(r => r.level === 10);
     if (residentRank) m.cityRankId = residentRank.id;
-    DB.set('countries', countries);
+    await saveCountry(c);
     toast('Игрок поселён', 'success');
     renderCity();
   }
 }
 
-// ===== ПРОФИЛЬ =====
+// ===== Профиль =====
 function renderProfile() {
-  const countries = DB.get('countries', []);
-  const myCountry = isModerator() ? null : countries.find(c => c.members.some(m => m.userId === currentUser.id));
+  const myCountry = isModerator() ? null : CACHE.countries.find(c => c.members.some(m => m.userId === currentUser.id));
   const myMembership = myCountry ? myCountry.members.find(m => m.userId === currentUser.id) : null;
   const myRank = myCountry && myMembership ? myCountry.ranks.find(r => r.id === myMembership.rankId) : null;
-  const myCity = myMembership ? DB.get('cities', []).find(ci => ci.id === myMembership.cityId) : null;
+  const myCity = myMembership ? CACHE.cities.find(ci => ci.id === myMembership.cityId) : null;
   const myCityRank = myCity ? myCity.ranks.find(r => r.id === myMembership.cityRankId) : null;
 
-  const myRequests = DB.get('requests', []).filter(r => r.userId === currentUser.id && r.status === 'pending');
+  const myRequests = CACHE.requests.filter(r => r.userId === currentUser.id && r.status === 'pending');
 
   document.getElementById('main-content').innerHTML = `
     <div class="page-header">
@@ -2823,7 +2830,7 @@ function renderProfile() {
       <div class="info-card glass">
         <h3>📨 Мои заявки</h3>
         ${myRequests.map(r => {
-          const c = countries.find(x => x.id === r.countryId);
+          const c = CACHE.countries.find(x => x.id === r.countryId);
           return `
             <div class="request-item">
               <div>
@@ -2841,13 +2848,14 @@ function renderProfile() {
   `;
 }
 
-function cancelRequest(reqId) {
-  DB.set('requests', DB.get('requests', []).filter(r => r.id !== reqId));
+async function cancelRequest(reqId) {
+  await deleteRequestDoc(reqId);
+  CACHE.requests = CACHE.requests.filter(r => r.id !== reqId);
   toast('Заявка отменена', 'info');
   renderProfile();
 }
 
-// ===== НАСТРОЙКИ =====
+// ===== Настройки =====
 function renderSettings() {
   document.getElementById('main-content').innerHTML = `
     <div class="page-header">
@@ -2941,7 +2949,7 @@ function openEditProfileModal() {
     reader.readAsDataURL(file);
   });
 }
-function saveProfile() {
+async function saveProfile() {
   const nick = document.getElementById('ep-nick').value.trim();
   const email = document.getElementById('ep-email').value.trim().toLowerCase();
   clearErr('err-ep-nick'); clearErr('err-ep-email');
@@ -2950,21 +2958,19 @@ function saveProfile() {
     showErr('err-ep-nick', 'Этот никнейм зарезервирован'); return;
   }
   if (!isValidEmail(email)) { showErr('err-ep-email', 'Некорректный email'); return; }
-  const users = DB.get('users', []);
-  if (users.some(u => u.id !== currentUser.id && u.nickname.toLowerCase() === nick.toLowerCase())) {
+  if (CACHE.users.some(u => u.id !== currentUser.id && u.nickname.toLowerCase() === nick.toLowerCase())) {
     showErr('err-ep-nick', 'Никнейм занят'); return;
   }
-  if (users.some(u => u.id !== currentUser.id && u.email === email)) {
+  if (CACHE.users.some(u => u.id !== currentUser.id && u.email === email)) {
     showErr('err-ep-email', 'Email уже используется'); return;
   }
-  const u = users.find(x => x.id === currentUser.id);
+  const u = CACHE.users.find(x => x.id === currentUser.id);
   u.nickname = nick; u.email = email;
   const av = document.getElementById('ep-avatar-preview').dataset.avatar;
   if (av) u.avatar = av;
   else if (!document.getElementById('ep-avatar-preview').querySelector('img')) u.avatar = null;
-  DB.set('users', users);
-  currentUser = Object.assign(currentUser, u);
-  DB.set('currentUser', currentUser);
+  await saveUser(u);
+  currentUser = u;
   closeModal();
   toast('Профиль обновлён', 'success');
   renderSidebarUser();
@@ -2998,7 +3004,7 @@ function openChangePasswordModal() {
     </div>
   `);
 }
-function savePassword() {
+async function savePassword() {
   const oldPass = document.getElementById('cp-old').value;
   const newPass = document.getElementById('cp-new').value;
   const newPass2 = document.getElementById('cp-new2').value;
@@ -3011,12 +3017,10 @@ function savePassword() {
   if (err) { showErr('err-cp-new', err); return; }
   if (newPass !== newPass2) { showErr('err-cp-new2', 'Пароли не совпадают'); return; }
 
-  const users = DB.get('users', []);
-  const u = users.find(x => x.id === currentUser.id);
+  const u = CACHE.users.find(x => x.id === currentUser.id);
   u.password = newPass;
-  DB.set('users', users);
+  await saveUser(u);
   currentUser.password = newPass;
-  DB.set('currentUser', currentUser);
   closeModal();
   toast('Пароль изменён', 'success');
 }
@@ -3061,54 +3065,111 @@ function openDeleteAccountConfirm() {
   });
   setTimeout(() => inp.focus(), 100);
 }
-function confirmDeleteAccount() {
+async function confirmDeleteAccount() {
   const inp = document.getElementById('delete-acc-input');
   if (inp.value.trim() !== currentUser.nickname) {
     showErr('err-delete-acc', 'Никнейм не совпадает'); return;
   }
-  let users = DB.get('users', []);
-  let countries = DB.get('countries', []);
-  let cities = DB.get('cities', []);
-  let requests = DB.get('requests', []);
-
-  const myCountryIds = countries.filter(c => c.creatorId === currentUser.id).map(c => c.id);
-  countries = countries.filter(c => c.creatorId !== currentUser.id);
-  cities = cities.filter(ci => !myCountryIds.includes(ci.countryId));
-  requests = requests.filter(r => !myCountryIds.includes(r.countryId));
-
-  countries.forEach(c => { c.members = c.members.filter(m => m.userId !== currentUser.id); });
-  cities.forEach(ci => { if (ci.mayorId === currentUser.id) ci.mayorId = null; });
-  requests = requests.filter(r => r.userId !== currentUser.id);
-  users = users.filter(u => u.id !== currentUser.id);
-
-  DB.set('users', users);
-  DB.set('countries', countries);
-  DB.set('cities', cities);
-  DB.set('requests', requests);
+  const myCountryIds = CACHE.countries.filter(c => c.creatorId === currentUser.id).map(c => c.id);
+  for (const cid of myCountryIds) {
+    const citiesToDelete = CACHE.cities.filter(ci => ci.countryId === cid);
+    for (const ci of citiesToDelete) await deleteCityDoc(ci.id);
+    const reqsToDelete = CACHE.requests.filter(r => r.countryId === cid);
+    for (const r of reqsToDelete) await deleteRequestDoc(r.id);
+    await deleteCountryDoc(cid);
+  }
+  for (const c of CACHE.countries) {
+    const before = c.members.length;
+    c.members = c.members.filter(m => m.userId !== currentUser.id);
+    if (c.members.length !== before) await saveCountry(c);
+  }
+  for (const ci of CACHE.cities) {
+    if (ci.mayorId === currentUser.id) { ci.mayorId = null; await saveCity(ci); }
+  }
+  const reqsToDelete = CACHE.requests.filter(r => r.userId === currentUser.id);
+  for (const r of reqsToDelete) await deleteRequestDoc(r.id);
+  await deleteUserDoc(currentUser.id);
+  await loadAllData();
   closeModal();
   toast('Аккаунт удалён', 'success');
   logout();
 }
 
-// ===== ИНИЦИАЛИЗАЦИЯ =====
-initDB();
+// ===== Экспорт функций в window (для onclick в HTML) =====
+window.navigate = navigate;
+window.openUserProfile = openUserProfile;
+window.modEditUser = modEditUser;
+window.saveModEditUser = saveModEditUser;
+window.modDeleteUser = modDeleteUser;
+window.openCreateCountryModal = openCreateCountryModal;
+window.createCountry = createCountry;
+window.joinCountry = joinCountry;
+window.openEditCountryModal = openEditCountryModal;
+window.saveCountryEdit = saveCountryEdit;
+window.openDeleteCountryConfirm = openDeleteCountryConfirm;
+window.confirmDeleteCountry = confirmDeleteCountry;
+window.leaveCountry = leaveCountry;
+window.kickMember = kickMember;
+window.changeMemberRank = changeMemberRank;
+window.changeMemberCity = changeMemberCity;
+window.openRanksEditorModal = openRanksEditorModal;
+window.openAddRankModal = openAddRankModal;
+window.addRank = addRank;
+window.openEditRankModal = openEditRankModal;
+window.saveRank = saveRank;
+window.deleteRank = deleteRank;
+window.acceptRequest = acceptRequest;
+window.rejectRequest = rejectRequest;
+window.openCreateCityModal = openCreateCityModal;
+window.createCity = createCity;
+window.openEditCityModal = openEditCityModal;
+window.saveCityEdit = saveCityEdit;
+window.openDeleteCityConfirm = openDeleteCityConfirm;
+window.confirmDeleteCity = confirmDeleteCity;
+window.leaveCity = leaveCity;
+window.kickFromCity = kickFromCity;
+window.assignToCity = assignToCity;
+window.cancelRequest = cancelRequest;
+window.openEditProfileModal = openEditProfileModal;
+window.saveProfile = saveProfile;
+window.openChangePasswordModal = openChangePasswordModal;
+window.savePassword = savePassword;
+window.confirmLogout = confirmLogout;
+window.openDeleteAccountConfirm = openDeleteAccountConfirm;
+window.confirmDeleteAccount = confirmDeleteAccount;
+window.closeModal = closeModal;
+window.openModCityListModal = openModCityListModal;
+window.switchCountryTab = switchCountryTab;
+window.switchCityTab = switchCityTab;
 
-// АВТО-ВХОД
-if (currentUser) {
-  const users = DB.get('users', []);
-  const freshUser = users.find(u => u.id === currentUser.id);
-  if (freshUser) {
-    currentUser = freshUser;
-    if (freshUser.isModerator) {
-      DB.set('moderatorMode', true);
+// ===== Старт =====
+async function init() {
+  document.getElementById('main-content').innerHTML = '<div class="loader">Загрузка данных...</div>';
+  await ensureAdmin();
+  await loadAllData();
+
+  const savedUserId = localStorage.getItem('mw_currentUserId');
+  if (savedUserId) {
+    const u = CACHE.users.find(x => x.id === savedUserId);
+    if (u) {
+      currentUser = u;
+      enterApp();
+      return;
+    } else {
+      localStorage.removeItem('mw_currentUserId');
     }
-    enterApp();
-  } else {
-    DB.remove('currentUser');
-    DB.remove('moderatorMode');
-    currentUser = null;
   }
+  document.getElementById('auth-screen').style.display = 'flex';
 }
+
+init().catch(err => {
+  console.error(err);
+  document.body.innerHTML = `<div style="padding:40px; color:#ff8fa3; font-family:sans-serif;">
+    <h2>Ошибка загрузки</h2>
+    <p>${escapeHtml(err.message)}</p>
+    <p style="color:#9090b8; margin-top:12px;">Проверь настройки Firestore и правила безопасности.</p>
+  </div>`;
+});
 </script>
 </body>
 </html>
