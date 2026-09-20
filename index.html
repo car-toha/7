@@ -266,6 +266,24 @@
   }
   .avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
 
+  /* ===== ГЛОБАЛЬНАЯ ОБРЕЗКА АВАТАРОК ===== */
+  .avatar {
+    overflow: hidden;
+  }
+  .avatar img,
+  .mini-avatar img,
+  .table-avatar img,
+  .up-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .mini-avatar {
+    overflow: hidden;
+  }
+  /* ======================================== */
+
   #app { display: none; height: 100vh; position: relative; z-index: 1; }
   #app.active { display: flex; }
   .sidebar {
