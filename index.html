@@ -393,6 +393,13 @@
   }
   .page-header p { color: var(--text-dim); font-size: 14px; margin-top: 4px; }
 
+  /* ===== УВЕЛИЧЕННАЯ АВАТАРКА В ШАПКЕ СТРАНЫ/ГОРОДА ===== */
+  .page-header .avatar {
+    box-shadow: 0 8px 30px rgba(124, 92, 255, 0.35);
+    border: 2px solid rgba(255, 255, 255, 0.12);
+  }
+  /* ============================================================ */
+
   .members-strip {
     display: flex;
     align-items: center;
@@ -478,13 +485,13 @@
     border-color: rgba(124, 92, 255, 0.3);
   }
   .list-item .avatar {
-    width: 52px; height: 52px;
+    width: 60px; height: 60px;
     border-radius: 50%;
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 600;
     color: white;
     flex-shrink: 0;
@@ -1599,7 +1606,7 @@ function renderCountries() {
 
     return `
       <div class="list-item" onclick="navigate('country', {countryId: '${c.id}'})">
-        ${avatarHtml(c, 52)}
+        ${avatarHtml(c, 60)}
         <div class="info">
           <div class="name">${escapeHtml(c.name)}</div>
           <div class="desc">${escapeHtml(c.description || 'Без описания')}</div>
@@ -1833,7 +1840,7 @@ function renderCountry() {
     }
     return `
       <div class="list-item" onclick="navigate('city', {countryId: '${c.id}', cityId: '${ci.id}'})">
-        ${avatarHtml(ci, 52)}
+        ${avatarHtml(ci, 60)}
         <div class="info">
           <div class="name">${escapeHtml(ci.name)}</div>
           <div class="desc">${escapeHtml(ci.description || 'Без описания')} ${mayor ? '• Мэр: ' + escapeHtml(mayor.nickname) : ''}</div>
@@ -1901,8 +1908,8 @@ function renderCountry() {
 
     <div class="page-header">
       <div style="flex:1; min-width:0;">
-        <div style="display:flex; align-items:center; gap:16px;">
-          ${avatarHtml(c, 64)}
+        <div style="display:flex; align-items:center; gap:20px;">
+          ${avatarHtml(c, 96)}
           <div style="min-width:0;">
             <h1>${escapeHtml(c.name)}</h1>
             <p>${escapeHtml(c.description || 'Без описания')} • ${c.autoAccept ? '🟢 Автопринятие' : '🟡 По заявкам'}</p>
@@ -1968,7 +1975,7 @@ function openModCityListModal(countryId) {
   if (!c) return;
   const listHtml = cities.length ? cities.map(ci => `
     <div class="list-item" onclick="closeModal(); setTimeout(()=>openEditCityModal('${c.id}', '${ci.id}'), 200);">
-      ${avatarHtml(ci, 44)}
+      ${avatarHtml(ci, 48)}
       <div class="info">
         <div class="name">${escapeHtml(ci.name)}</div>
         <div class="desc">${escapeHtml(ci.description || 'Без описания')}</div>
@@ -2702,8 +2709,8 @@ function renderCity() {
 
     <div class="page-header">
       <div style="flex:1; min-width:0;">
-        <div style="display:flex; align-items:center; gap:16px;">
-          ${avatarHtml(city, 64)}
+        <div style="display:flex; align-items:center; gap:20px;">
+          ${avatarHtml(city, 96)}
           <div style="min-width:0;">
             <h1>${escapeHtml(city.name)}</h1>
             <p>${escapeHtml(city.description || 'Без описания')} • Мэр: ${city.mayorId ? escapeHtml(CACHE.users.find(u => u.id === city.mayorId)?.nickname || '—') : '<span style="color:var(--text-dim);">не назначен</span>'}</p>
